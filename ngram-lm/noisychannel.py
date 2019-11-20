@@ -8,10 +8,15 @@ file_train_eng1 = "en_ewt-ud-train.conllu"
 file_dev_eng1 = "en_ewt-ud-dev.conllu"
 file_test_eng1 = "en_ewt-ud-test.conllu"
 
-path_eng2 = "UD_English-GUM"
-file_train_eng2 = "en_gum-ud-train.conllu"
-file_dev_eng2 = "en_gum-ud-dev.conllu"
-file_test_eng2 = "en_gum-ud-test.conllu"
+# path_eng2 = "UD_English-GUM"
+# file_train_eng2 = "en_gum-ud-train.conllu"
+# file_dev_eng2 = "en_gum-ud-dev.conllu"
+# file_test_eng2 = "en_gum-ud-test.conllu"
+
+path_eng2 = "UD_French-GSD"
+file_train_eng2 = "fr_gsd-ud-train.conllu"
+file_dev_eng2 = "fr_gsd-ud-dev.conllu"
+file_test_eng2 = "fr_gsd-ud-test.conllu"
 
 # path_eng3 = "UD_English-ParTUT"
 # file_train_eng3 = "en_partut-ud-train.conllu"
@@ -83,6 +88,17 @@ class NoisyChannel:
         pwl = dict(map(lambda kv:(kv[0],kv[1]/Z), dist.items()))
         return pwl
 
+    def eval_baseline(self, corpora):
+        actual = []
+        sentences = 0
+        for idx, corpus in enumerate(corpora):
+            for sentence in corpora[corpus].sentences:
+                actual.append(idx)
+                sentences+=1
+
+        pred = np.full(sentences, np.argmax(self.prior))
+        self.scores(actual, pred)
+
     def train(self):
         pwl = dict()
         for i in range(self.l):
@@ -90,25 +106,27 @@ class NoisyChannel:
 
         self.likelihood = pwl
 
-    def eval(self, test):
+    def eval(self, corpora):
         pred = []
-        for sentence in test.sentences:
-            posterior = np.zeros(self.l)
-            for i in range(self.l):
-                likelihood = 0
-                for word in sentence:
-                    key = (i, word)
-                    likelihood += math.log(self.likelihood.get(key,1))
-                likelihood += math.log(self.prior[i])
-                posterior[i] = abs(likelihood)
-            pred.append(np.argmax(posterior))
-        return pred
+        actual = []
+        for idx, corpus in enumerate(corpora):
+            for sentence in corpora[corpus].sentences:
+                actual.append(idx)
+                posterior = np.zeros(self.l)
+                for i in range(self.l):
+                    likelihood = 0
+                    for word in sentence:
+                        key = (i, word)
+                        likelihood += math.log(self.likelihood.get(key,1))
+                    likelihood += math.log(self.prior[i])
+                    posterior[i] = abs(likelihood)
+                pred.append(np.argmax(posterior))
+        
+        self.scores(actual, pred)
 
     def scores(self, actual, pred):
         print("Accuracy:", metrics.accuracy_score(actual, pred))
-        print("Precision:", metrics.precision_score(actual, pred, average="macro"))
-        print("Recall:", metrics.recall_score(actual, pred, average="macro"))
-        print("F1 Score:", metrics.f1_score(actual, pred, average="macro"))
+        print(metrics.classification_report(actual, pred))
 
 #%%
 corpora = dict()
@@ -121,33 +139,38 @@ corpora[1] = corpus2
 corpus3 = Corpus(path_eng3+"/"+file_train_eng3)
 corpora[2] = corpus3
 
+corpora_dev = dict()
+corpus1 = Corpus(path_eng1+"/"+file_dev_eng1)
+corpora_dev[0] = corpus1
+
+corpus2 = Corpus(path_eng2+"/"+file_dev_eng2)
+corpora_dev[1] = corpus2
+
+corpus3 = Corpus(path_eng3+"/"+file_dev_eng3)
+corpora_dev[2] = corpus3
+
+corpora_test = dict()
+corpus1 = Corpus(path_eng1+"/"+file_test_eng1)
+corpora_test[0] = corpus1
+
+corpus2 = Corpus(path_eng2+"/"+file_test_eng2)
+corpora_test[1] = corpus2
+
+corpus3 = Corpus(path_eng3+"/"+file_test_eng3)
+corpora_test[2] = corpus3
+
 #%%
 model = NoisyChannel(corpora)
 baseline = np.argmax(model.prior)
-
-#%%
-model = NoisyChannel(corpora)
 model.train()
 
 #%%
-# EWT
-corpus_dev = Corpus(path_eng1+"/"+file_dev_eng1)
-pred = model.eval(corpus_dev)
-actual = np.full(len(corpus_dev.sentences),0)
-model.scores(actual, pred)
+# Dev
+model.eval_baseline(corpora_dev)
+model.eval(corpora_dev)
 
 #%%
-# GUM
-corpus_dev = Corpus(path_eng2+"/"+file_dev_eng2)
-pred = model.eval(corpus_dev)
-actual = np.full(len(corpus_dev.sentences),1)
-model.scores(actual, pred)
-
-#%%
-# parTUT
-corpus_dev = Corpus(path_eng3+"/"+file_dev_eng3)
-pred = model.eval(corpus_dev)
-actual = np.full(len(corpus_dev.sentences),2)
-model.scores(actual, pred)
+# Test
+model.eval(corpora_test)
 
 #%%

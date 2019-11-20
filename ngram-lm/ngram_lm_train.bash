@@ -1,7 +1,1 @@
-python ngram-lm.py  \
-    --train True \
-    --lmtype $1 \
-    --N $2 \
-    --corpus $3 \
-    --model $4 \
-    --hp-args $5
+python ngram-lm.py --train True --lmtype $1 --N $2 --corpus $3 --tune $4 --model $5 --hpargs $6

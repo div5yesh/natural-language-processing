@@ -1,3 +1,1 @@
-python ngram-lm.py  \
-    --model $1 \
-    --corpus $2
+python ngram-lm.py --lmtype "" --N 0 --corpus $2 --tune "" --model $1 --hpargs ""

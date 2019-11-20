@@ -7,14 +7,14 @@ file_train_eng = "en_ewt-ud-train.conllu"
 file_dev_eng = "en_ewt-ud-dev.conllu"
 file_test_eng = "en_ewt-ud-test.conllu"
 
-
+np.seterr(divide = 'ignore') 
 #%%
 class Corpus:
     def __init__(self, file):
         self.sentences = self.load_corpus(file)
 
     def load_corpus(self, file):
-        fp = open(file, "r", encoding='utf-8')
+        fp = open(file, "r")
         data = fp.read()
         fp.close()
 
@@ -29,13 +29,12 @@ class Corpus:
         tokens = []
         words = list(map(self.cleanup, corpus))
         for word in words:
-            # TODO: remove BOS and EOS for unigrams
             sentence = ["<BOS>"] + list(word[:, 1]) + ["<EOS>"]
             tokens += list(word[:, 1])
             sentences.append(sentence)
 
         self.tokens = tokens
-        self.vocab = np.unique(tokens)
+        self.vocab = set(np.unique(tokens))
         return np.asarray(sentences)
 
     def cleanup(self, sentence):
@@ -82,42 +81,37 @@ class NGramLM:
 
         return NGramProb
 
-    def qby(self, discount, epsilon):
-        qb = dict()
-        unigramcounts = self.getNGrams(1)
+    def getBackoffProb(self, N, backoff):
+        discount = backoff["discount"]
+        threshold = backoff["threshold"]
         discountedunigramprob = self.get1GramsProb(discount)
-        for sentence in self.corpus.sentences:
-            for idx in range(len(sentence)):
-                key = tuple(sentence[idx:idx+1])
-                if unigramcounts[key] > epsilon:
-                    qb[key] = discountedunigramprob[key]
-                else:
-                    qb[key] = 1 - discountedunigramprob[key]
+        if N ==1:
+            return discountedunigramprob
 
-        return qb
-
-    def bkp(self, N, discount, epsilon):
         bkprob = dict()
         bigramcounts = self.getNGrams(2)
-        discountedunigramprob = self.get1GramsProb(discount)
         discountedbigrams = self.getNGramsProb(2, discount)
-        bkoff = self.qby(discount, epsilon)
+        bkoffweights = self.getBackoffWeight(bigramcounts)
         for sentence in self.corpus.sentences:
             for idx in range(len(sentence)):
                 key = tuple(sentence[idx:idx + N])
                 history = tuple(sentence[idx:idx + N - 1])
-                if bigramcounts[key] > epsilon:
+                if bigramcounts[key] > threshold:
                     bkprob[key] = discountedbigrams[key]
                 else:
-                    alpha = 0
-                    for bigram, p in discountedbigrams.items():
-                        if bigram[0] == history[0] and bigramcounts[bigram] > 0:
-                            alpha += p
-
-                    alpha = (1 - alpha)/(1- discountedunigramprob[history])
-                    bkprob[key] = alpha * bkoff[history]
+                    bkprob[key] = bkoffweights.get(history, 1) * discountedunigramprob[(key[1],)]
 
         return bkprob
+
+    def getBackoffWeight(self, ngrams):
+        weights = dict()
+        for key in ngrams:
+            if ngrams[key] == 0:
+                weights[key[0]] = weights.get(key[0], 0) + 1
+
+        Z = sum(weights.values())
+        weights = dict(map(lambda kv: (kv[0], kv[1]/Z), weights.items()))
+        return weights
 
     def save(self, data, file):
         pickle.dump(data, open(file, "wb"))
@@ -132,8 +126,9 @@ class NGramLM:
         for sentence in test.sentences:
             for idx in range(len(sentence)):
                 key = tuple(sentence[idx:idx + N])
-                log_prob += np.log(NGramProb.get(key, 1))
-                count += 1
+                if key in NGramProb and NGramProb > 0:
+                    log_prob += np.log(NGramProb[key])
+                    count += 1
 
         return np.exp(-log_prob / count)
 
@@ -141,49 +136,54 @@ class NGramLM:
         model = self.getNGramsProb(N, 0)
         return {"model": model, "N": N}
 
+    def trainBackoff(self, N):
+        model = self.getBackoffProb(N, self.backoff)
+        return {"model": model, "N": N}
+
     def eval(self, data):
         self.model = data["model"]
         ppl = self.getNGramPPL(data["N"], self.corpus)
         return ppl
 
-#%%
-backoff = {"discount": 400, "threshold": 500, "alpha": 0.5}
-train = Corpus("UD_English-EWT/en_ewt-ud-train.conllu")
-lm2g_eng = NGramLM(train, 0, backoff)
-# print(lm2g_eng.qby(100,150))
-print(lm2g_eng.bkp(2, 100, 150))
+# #%%
+# # ------------------------------------------------------------debugging calls
+# backoff = {"discount": 0.1, "threshold": 0}
+# train = Corpus("UD_English-EWT/en_ewt-ud-train.conllu")
+# lm2g_eng = NGramLM(train, 0, backoff)
+# model = lm2g_eng.trainBackoff(2)
+# lm2g_eng.save(model, "best-2gram_bkoff.lm")
 
-#%%
-model = lm2g_eng.train(2)
-lm2g_eng.save(model, "2gram.lm")
-
-test = Corpus("UD_English-EWT/en_ewt-ud-dev.conllu")
-lm2g_eng = NGramLM(test, 0, backoff)
-print(lm2g_eng.eval(model))
-model = lm2g_eng.load("2gram.lm")
-print(lm2g_eng.eval(model))
+# test = Corpus("UD_English-EWT/en_ewt-ud-dev.conllu")
+# # test = Corpus("UD_English-EWT/en_ewt-ud-test.conllu")
+# lm2g_eng = NGramLM(test, 0, backoff)
+# model = lm2g_eng.load("best-2gram_bkoff.lm")
+# print(lm2g_eng.eval(model))
 
 # #%%
 # train = Corpus("UD_English-EWT/en_ewt-ud-train.conllu")
-# lm1g_eng = NGramLM(train, 0, None)
+# lm1g_eng = NGramLM(train, 100, None)
 # model = lm1g_eng.train(1)
 # lm1g_eng.save(model, "1gram.lm")
 
-# test = Corpus("UD_English-EWT/en_ewt-ud-dev.conllu")
+# #%%
+# # test = Corpus("UD_English-EWT/en_ewt-ud-dev.conllu")
+# test = Corpus("UD_English-EWT/en_ewt-ud-test.conllu")
 # lm1g_eng = NGramLM(test, 0, None)
-# print(lm1g_eng.eval(model))
+# # print(lm1g_eng.eval(model))
 # model = lm1g_eng.load("1gram.lm")
 # print(lm1g_eng.eval(model))
 
 # #%%
 # train = Corpus("UD_English-EWT/en_ewt-ud-train.conllu")
-# lm2g_eng = NGramLM(train, 0, None)
+# lm2g_eng = NGramLM(train, 100, None)
 # model = lm2g_eng.train(2)
 # lm2g_eng.save(model, "2gram.lm")
 
-# test = Corpus("UD_English-EWT/en_ewt-ud-dev.conllu")
+# #%%
+# # test = Corpus("UD_English-EWT/en_ewt-ud-dev.conllu")
+# test = Corpus("UD_English-EWT/en_ewt-ud-test.conllu")
 # lm2g_eng = NGramLM(test, 0, None)
-# print(lm2g_eng.eval(model))
+# # print(lm2g_eng.eval(model))
 # model = lm2g_eng.load("2gram.lm")
 # print(lm2g_eng.eval(model))
 
@@ -212,24 +212,27 @@ print(lm2g_eng.eval(model))
 # print(lm2g_eng.eval(model))
 
 #%%
-# if __name__ == '__main__':
-#     parser = argparse.ArgumentParser()
-#     parser.add_argument('--train', type=bool)
-#     parser.add_argument('--corpus')
-#     parser.add_argument('--model')
-#     parser.add_argument('--lmtype')
-#     parser.add_argument('--N', type=int)
-#     # train_args = ['--train','True','--model','2gram.p','--corpus','UD_English-EWT/en_ewt-ud-train.conllu','--lmtype','mle','--N','1']
-#     # args = parser.parse_args(train_args)
-#     test_args = ['--model','1gram.p','--corpus','UD_English-EWT/en_ewt-ud-dev.conllu','--lmtype','mle','--N','1']
-#     args = parser.parse_args(test_args)
-#     print(args)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', type=bool)
+    parser.add_argument('--corpus')
+    parser.add_argument('--model')
+    parser.add_argument('--lmtype')
+    parser.add_argument('--tune')
+    parser.add_argument('--hpargs')
+    parser.add_argument('--N', type=int)
+    args = parser.parse_args()
+    if args.train:
+        train = Corpus(args.corpus)
+        lm_eng = NGramLM(train, 0, None)
+        model = lm_eng.train(args.N)
 
-#     if args.train:
-#         train = Corpus(args.corpus)
-#         lm_eng = NGramLM(train, args.model, args.N, 0, 0)
-#         lm_eng.train()
-#     else:
-#         test = Corpus(args.corpus)
-#         lm_eng = NGramLM(test, args.model, args.N, 0, 0)
-#         print(lm_eng.eval())
+        dev = Corpus(args.tune)
+        lm_eng = NGramLM(dev, 0, args.hpargs)
+        print(lm_eng.eval(model))
+        lm_eng.save(model, args.model)
+    else:
+        test = Corpus(args.corpus)
+        lm_eng = NGramLM(test, 0, None)
+        model = lm_eng.load(args.model)
+        print(lm_eng.eval(model))
